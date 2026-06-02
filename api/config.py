@@ -26,22 +26,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 # ── Basic layout ──────────────────────────────────────────────────────────────
-HOME = Path.home()
+import api.paths as _paths
+
+HOME = _paths.HOME
+_hermes_home_has_webui_state = _paths._hermes_home_has_webui_state
+_platform_default_hermes_home = _paths._platform_default_hermes_home
+
 # REPO_ROOT is the directory that contains this file's parent (api/ -> repo root)
 REPO_ROOT = Path(__file__).parent.parent.resolve()
-
-
-def _platform_default_hermes_home() -> Path:
-    """Return the platform-aware default Hermes home when HERMES_HOME is unset.
-
-    Native Windows Hermes Agent installs default to %LOCALAPPDATA%\\hermes,
-    while POSIX installs use ~/.hermes.
-    """
-    if os.name == "nt":
-        local_app_data = os.getenv("LOCALAPPDATA", "").strip()
-        if local_app_data:
-            return Path(local_app_data) / "hermes"
-    return HOME / ".hermes"
 
 # ── Network config (env-overridable) ─────────────────────────────────────────
 HOST = os.getenv("HERMES_WEBUI_HOST", "127.0.0.1")
@@ -1258,14 +1250,29 @@ _PROVIDER_MODELS = {
 
 _AMBIENT_GH_CLI_MARKERS = frozenset({"gh_cli", "gh auth token"})
 
+# Environment variable sources that are auto-detected and should be filtered
+# when the token is a classic PAT (ghp_*) that Copilot API doesn't support.
+# Note: COPILOT_GITHUB_TOKEN is NOT included here - it's user-specific config.
+_AMBIENT_GH_ENV_SOURCES = frozenset({"env:github_token", "env:gh_token"})
+
 
 def _is_ambient_gh_cli_entry(source: str, label: str, key_source: str) -> bool:
     """True when a credential-pool entry is a seeded gh-cli token rather than
     one the user added explicitly. Filter these so Copilot doesn't appear in
     the dropdown just because `gh` is installed on the system.
+
+    Also filters GITHUB_TOKEN and GH_TOKEN env var entries, which are
+    auto-detected from the environment and should not cause Copilot to appear
+    in the picker when the token is a classic PAT (ghp_*) that Copilot API
+    doesn't support.
+
+    Note: COPILOT_GITHUB_TOKEN is NOT filtered - it's user-specific config
+    that should always be respected.
     """
+    source_lower = source.strip().lower()
     return (
-        source.strip().lower() in _AMBIENT_GH_CLI_MARKERS
+        source_lower in _AMBIENT_GH_CLI_MARKERS
+        or source_lower in _AMBIENT_GH_ENV_SOURCES
         or label.strip().lower() == "gh auth token"
         or key_source.strip().lower() == "gh auth token"
     )
@@ -2102,6 +2109,90 @@ def _strip_provider_hint_for_reasoning(model_id: str) -> str:
     return model
 
 
+def _reasoning_name_candidates(model_id: str) -> list[str]:
+    """Return normalized model-name candidates for heuristic capability checks."""
+    bare = str(model_id or "").strip().lower().rsplit("/", 1)[-1]
+    if not bare:
+        return []
+
+    candidates: list[str] = []
+
+    def _add(value: str) -> None:
+        candidate = str(value or "").strip().lower()
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    _add(bare)
+
+    dot_parts = [part for part in bare.split(".") if part]
+    if len(dot_parts) > 1:
+        # Try progressively stripping dot-separated vendor namespaces so inputs like
+        # "moonshotai.kimi-k2.5" and "vendor.deepseek.v3.2" both surface the real
+        # model family rather than treating every dot as part of the provider slug.
+        for index in range(1, len(dot_parts)):
+            suffix = ".".join(dot_parts[index:])
+            if any(ch.isalpha() for ch in suffix):
+                _add(suffix)
+
+    for candidate in list(candidates):
+        normalized = re.sub(r"[^a-z0-9]+", "-", candidate).strip("-")
+        _add(normalized)
+
+    return candidates
+
+
+def _candidate_supports_reasoning(candidate: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "-", str(candidate or "").strip().lower()).strip("-")
+    if not normalized:
+        return False
+
+    tokens = [token for token in normalized.split("-") if token]
+    token_set = set(tokens)
+
+    if "thinking" in token_set or "reasoning" in token_set:
+        return True
+    if "gpt" in token_set or normalized.startswith("gpt"):
+        # Restrict to GPT-5+ (exclude GPT-4o/4.1/3.5 — reasoning_effort unsupported)
+        m = re.search(r"gpt-(\d+)", normalized)
+        if m and int(m.group(1)) >= 5:
+            return True
+        return False
+    if normalized in {"o1", "o3", "o4"} or normalized.startswith(("o1-", "o3-", "o4-")):
+        return True
+    if "claude" in token_set or normalized.startswith("claude"):
+        # Restrict to Claude 4+ or Claude 3.7+ (exclude Claude 3.0/3.5)
+        match = re.search(r"claude.*?(\d+)(?:\D+(\d+))?", normalized)
+        if match:
+            major = int(match.group(1))
+            minor = int(match.group(2)) if match.group(2) else 0
+            if major >= 4 or (major == 3 and minor >= 7):
+                return True
+        return False
+    if "qwen" in token_set or normalized.startswith("qwen"):
+        # Restrict to Qwen 3+ (exclude Qwen 2/2.5)
+        match = re.search(r"qwen.*?(\d+)(?:\D+(\d+))?", normalized)
+        if match:
+            major = int(match.group(1))
+            if major >= 3:
+                return True
+        return False
+    if "kimi" in token_set or normalized.startswith("kimi"):
+        return True
+    if "minimax" in token_set or normalized.startswith("minimax"):
+        return True
+    if "mimo" in token_set or normalized.startswith("mimo"):
+        return True
+    if "glm" in token_set or normalized.startswith("glm"):
+        return True
+    if "step" in token_set or normalized.startswith("step"):
+        return True
+    if normalized.startswith(("deepseek-v", "deepseek-r")):
+        return True
+    if len(tokens) >= 2 and tokens[0] == "deepseek" and tokens[1].startswith(("v", "r")):
+        return True
+    return False
+
+
 def _heuristic_reasoning_efforts(model_id: str, provider_id: str) -> list[str]:
     """Fallback when hermes_cli is unavailable."""
     model = _strip_provider_hint_for_reasoning(model_id).lower()
@@ -2131,31 +2222,11 @@ def _heuristic_reasoning_efforts(model_id: str, provider_id: str) -> list[str]:
     )
     if any(model.startswith(prefix) for prefix in prefixes):
         return list(VALID_REASONING_EFFORTS)
-    # Custom API aggregators (e.g. New API, One API) use non-standard model naming:
-    # bare names like "deepseek-v4-flash" or dot-separated "moonshotai.kimi-k2.5"
-    # rather than the OpenRouter-style "vendor/model" that the prefix list targets.
-    # Strip a dot-vendor prefix (e.g. "moonshotai.kimi-k2.5" → "kimi-k2.5") and
-    # check both the original bare name and the stripped suffix.
-    bare_after_dot = bare.split(".", 1)[-1] if "." in bare else bare
-    thinking_bare_prefixes = (
-        "deepseek-v4",
-        "deepseek-r1",
-        "deepseek-r2",
-        "kimi-k2",
-        "kimi-thinking",
-        "qwen3",
-        "claude-3",
-        "claude-4",
-        "o1-",
-        "o3-",
-        "o4-",
-    )
-    if any(
-        bare.startswith(p) or bare_after_dot.startswith(p)
-        for p in thinking_bare_prefixes
-    ):
-        return list(VALID_REASONING_EFFORTS)
-    if "thinking" in bare or "reasoning" in bare:
+    # Named custom providers often rewrite model ids with dots, underscores, or
+    # extra vendor namespaces. Normalize those shapes before applying family-level
+    # reasoning heuristics so "deepseek.v3.2", "deepseek_v4_flash", and
+    # "vendor.deepseek.v3.2" are treated consistently.
+    if any(_candidate_supports_reasoning(candidate) for candidate in _reasoning_name_candidates(bare)):
         return list(VALID_REASONING_EFFORTS)
     return []
 
@@ -2527,7 +2598,7 @@ _cache_build_in_progress = False  # True while a cold path is actively building
 # session is expensive (~10s for zai due to endpoint probing).  The credential pool
 # only changes when the user adds/removes credentials, which is rare; a 24h TTL
 # is plenty safe and ensures get_available_models() cold paths are fast.
-_CREDENTIAL_POOL_CACHE: dict[str, tuple[float, "CredentialPool"]] = {}  # pid -> (ts, pool)
+_CREDENTIAL_POOL_CACHE: dict[str, tuple[float, "CredentialPool"]] = {}  # noqa: F821  forward-ref string annotation, resolved at runtime  # pid -> (ts, pool)
 _provider_models_invalidated_ts: dict[str, float] = {}  # provider_id -> timestamp of last invalidation
 
 # Disk-backed in-memory cache for get_available_models().
@@ -3049,9 +3120,9 @@ def _get_label_for_model(model_id: str, existing_groups: list) -> str:
             if m.get("label") and _norm(str(m.get("id", ""))) == norm_lookup:
                 return m["label"]
 
-    # Fall back: capitalize each hyphen-separated word, preserve dots in version numbers.
-    # The catalog lookup above handles well-known models; this only fires for unlisted IDs.
-    bare = lookup_id.split("/")[-1] if "/" in lookup_id else lookup_id
+    # Fall back: strip only the first slash-segment (provider prefix),
+    # preserving vendor hierarchy for multi-slash IDs (#3360).
+    bare = lookup_id.split("/", 1)[1] if "/" in lookup_id else lookup_id
     return " ".join(
         w.upper() if (len(w) <= 3 and w.replace(".", "").isalnum() and not w.isdigit()) else w.capitalize()
         for w in bare.replace("_", "-").split("-")
@@ -3204,11 +3275,14 @@ def get_available_models() -> dict:
             if s.startswith("@") and ":" in s:
                 parts = s.split(":")
                 s = parts[-1] or s
-            # Strip provider/model prefix (e.g., custom:jingdong/GLM-5 -> GLM-5).
-            # Same trailing-empty guard.
+            # Strip only the first slash-segment (provider prefix), preserving
+            # any remaining vendor hierarchy.  Using parts[-1] here previously
+            # discarded ALL segments except the last, collapsing distinct
+            # multi-slash IDs like 'vendor_a/deepseek-v4-pro' and
+            # 'vendor_b/deepseek/deepseek-v4-pro' to the same key (#3360).
             if "/" in s:
-                parts = s.split("/")
-                s = parts[-1] or s
+                stripped = s.split("/", 1)[1]
+                s = stripped or s
             return s.replace("-", ".")
 
         def _build_configured_model_badges() -> dict[str, dict[str, str]]:
@@ -4839,6 +4913,7 @@ _SETTINGS_DEFAULTS = {
     "show_thinking": True,  # show/hide thinking/reasoning blocks in chat view
     "simplified_tool_calling": True,  # render tools/thinking as compact inline timeline activity
     "api_redact_enabled": True,  # redact sensitive data (API keys, secrets) from API responses
+    "dashboard_plugins": {},  # plugin_name -> bool, opt-in per plugin (default off per PF-10b)
     "sidebar_density": "compact",  # compact | detailed
     "auto_title_refresh_every": "0",  # adaptive title refresh: 0=off, 5/10/20=every N exchanges
     "busy_input_mode": "queue",  # behavior when sending while agent is running: queue | interrupt | steer
@@ -5010,7 +5085,19 @@ def save_settings(settings: dict) -> dict:
     if settings.pop("_clear_password", False):
         current["password_hash"] = None
         _password_changed = True
+    # Deep-merge dashboard_plugins dict (plugin_name -> bool)
+    _dashboard_plugins = settings.get("dashboard_plugins")
+    if isinstance(_dashboard_plugins, dict):
+        current_dash = current.get("dashboard_plugins", {})
+        if isinstance(current_dash, dict):
+            # Coerce values to bool + keep only str keys so settings.json can't be
+            # polluted with non-bool/non-str junk from a crafted POST.
+            current_dash.update({k: bool(v) for k, v in _dashboard_plugins.items() if isinstance(k, str)})
+            current["dashboard_plugins"] = current_dash
     for k, v in settings.items():
+        # dashboard_plugins is deep-merged above (not a flat allowlisted scalar).
+        if k == "dashboard_plugins":
+            continue
         if k in _SETTINGS_ALLOWED_KEYS:
             if k == "theme":
                 if isinstance(v, str) and v.strip():
