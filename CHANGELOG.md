@@ -3,6 +3,21 @@
 
 ## [Unreleased]
 
+## [v0.51.220] — 2026-06-02 — Release GN (stage-p3c — fix aux title generation with @provider: model ids)
+
+### Fixed
+- Manual session-title regeneration and background auxiliary title generation no longer fail with `422` / `llm_error_aux` when `auxiliary.title_generation.model` in `config.yaml` is set using the WebUI model-picker's `@provider:model` format (e.g. `@gemini:gemini-3.1-flash-lite`). The `@provider:` prefix is now normalized away via the canonical helper before the id reaches the provider API (#3430, @pamnard).
+
+## [v0.51.219] — 2026-06-02 — Release GM (stage-p3b — extend URI-scheme model-ID fix to backend normalization + matching)
+
+### Fixed
+- Extended the #3429 URI-scheme fix beyond the visible model chip (fixed in v0.51.218) to the model-identity normalization and matching paths: `api/config.py` `_norm_model_id` / `_get_label_for_model` and `static/ui.js` `_normalizeConfiguredModelKey` no longer strip the first `/`-segment of a `scheme://` id (e.g. `gpt://${FOLDER}/model/latest`), where the slashes are path separators rather than a provider prefix. This prevents the #3360-class identity collision/mislabel for URI-shaped model IDs in dropdown matching, badge assignment, and configured-entry dedup. Backend/front-end parity is covered by tests (#3436, @b3nw).
+
+## [v0.51.218] — 2026-06-02 — Release GL (stage-p3a — fix getModelLabel mangling URI-scheme model IDs)
+
+### Fixed
+- The composer model chip no longer shows env-var path junk for model IDs that use a URI scheme (e.g. Yandex `gpt://${FOLDER}/deepseek-v4-flash/latest`). A regression from #3366 (v0.51.210): `getModelLabel()` stripped the first `/`-segment, which for a `scheme://` id landed inside the `://` and left `/${FOLDER}/…`. The label now detects a URI scheme, drops scheme + authority, and takes the last meaningful path segment (skipping `${…}` placeholders and bare version tails like `latest`); non-URI multi-slash IDs keep their #3360 behavior (#3429).
+
 ## [v0.51.217] — 2026-06-02 — Release GK (stage-p2f — decode and complete zh-Hant locale strings)
 
 ### Changed
