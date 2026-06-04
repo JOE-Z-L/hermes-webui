@@ -3,6 +3,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Native Windows `start.ps1` now sets `HERMES_CONFIG_PATH` from the resolved `HERMES_HOME` when the caller has not explicitly overridden it, so isolated onboarding/support trials no longer fall through to a real `%LOCALAPPDATA%\\hermes\\config.yaml` just because the machine already has a Hermes install.
+
 ## [v0.51.220] — 2026-06-02 — Release GN (stage-p3c — fix aux title generation with @provider: model ids)
 
 ### Fixed

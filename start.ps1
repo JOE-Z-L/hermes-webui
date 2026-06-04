@@ -166,6 +166,9 @@ if (-not $env:HERMES_HOME) {
         $env:HERMES_HOME = Join-Path $env:USERPROFILE '.hermes'
     }
 }
+if (-not $env:HERMES_CONFIG_PATH) {
+    $env:HERMES_CONFIG_PATH = Join-Path $env:HERMES_HOME 'config.yaml'
+}
 if (-not $env:HERMES_WEBUI_STATE_DIR) {
     $env:HERMES_WEBUI_STATE_DIR = Join-Path $env:HERMES_HOME 'webui'
 }

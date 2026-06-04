@@ -53,6 +53,7 @@ For a clean local trial, use an isolated Hermes home and WebUI state directory:
 ```bash
 mkdir -p ~/hermes-onboarding-test
 HERMES_HOME=~/hermes-onboarding-test/.hermes \
+HERMES_CONFIG_PATH=~/hermes-onboarding-test/.hermes/config.yaml \
 HERMES_WEBUI_STATE_DIR=~/hermes-onboarding-test/webui \
 HERMES_WEBUI_PORT=8789 \
 python3 bootstrap.py

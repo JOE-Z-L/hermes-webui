@@ -58,7 +58,7 @@ test -f .env && grep -n 'HERMES_HOME\|HERMES_WEBUI_STATE_DIR\|HERMES_WEBUI_PORT\
 
 If `.env` exists, do not print the full file. Inspect only the specific
 non-secret keys needed to understand the active Hermes home, WebUI state
-directory, port, or host.
+directory, config path, port, or host.
 
 ## Isolated local trial
 
@@ -69,6 +69,7 @@ profiles, credentials, and cron state.
 ```bash
 mkdir -p ~/hermes-onboarding-test
 HERMES_HOME=~/hermes-onboarding-test/.hermes \
+HERMES_CONFIG_PATH=~/hermes-onboarding-test/.hermes/config.yaml \
 HERMES_WEBUI_STATE_DIR=~/hermes-onboarding-test/webui \
 HERMES_WEBUI_PORT=8789 \
 python3 bootstrap.py
