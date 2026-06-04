@@ -64,3 +64,4 @@ graphify-out/
 node_modules/
 package-lock.json
 /start-local.ps1
+/.idea/ShadcnHelperSettings.xml
